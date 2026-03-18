@@ -3,42 +3,36 @@ import tensorflow as tf
 import numpy as np
 import cv2
 from PIL import Image
+from tensorflow.keras.models import model_from_json
 
-# =========================
-# Load Model (FIX INCLUDED)
-# =========================
-model = tf.keras.models.load_model(
-    "model.keras",
-    compile=False,
-    safe_mode=False   # 🔥 IMPORTANT FIX
-)
+# ---------------------------
+# LOAD MODEL (JSON + WEIGHTS)
+# ---------------------------
+@st.cache_resource
+def load_my_model():
+    with open("model.json", "r") as json_file:
+        model = model_from_json(json_file.read())
+    model.load_weights("model.weights.h5")
+    return model
 
-# =========================
-# Title
-# =========================
-st.title("Breast Cancer Detection + GradCAM 🔬")
+model = load_my_model()
 
-# =========================
-# Upload Image
-# =========================
-uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
-
-# =========================
-# Preprocess Image
-# =========================
-def preprocess_image(img):
-    img = img.resize((224, 224))
+# ---------------------------
+# IMAGE PREPROCESS
+# ---------------------------
+def preprocess_image(image):
+    img = image.resize((224, 224))  # adjust if needed
     img = np.array(img) / 255.0
     img = np.expand_dims(img, axis=0)
     return img
 
-# =========================
-# GradCAM Function
-# =========================
-def get_gradcam(img_array, model, layer_name):
+# ---------------------------
+# GRADCAM FUNCTION
+# ---------------------------
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name):
     grad_model = tf.keras.models.Model(
-        inputs=model.inputs,
-        outputs=[model.get_layer(layer_name).output, model.output]
+        [model.inputs], 
+        [model.get_layer(last_conv_layer_name).output, model.output]
     )
 
     with tf.GradientTape() as tape:
@@ -53,45 +47,56 @@ def get_gradcam(img_array, model, layer_name):
     heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
     heatmap = tf.squeeze(heatmap)
 
-    heatmap = np.maximum(heatmap, 0) / (np.max(heatmap) + 1e-8)
-    return heatmap
+    heatmap = np.maximum(heatmap, 0) / np.max(heatmap)
+    return heatmap.numpy()
 
-# =========================
-# Run App
-# =========================
+# ---------------------------
+# OVERLAY HEATMAP
+# ---------------------------
+def overlay_heatmap(heatmap, image):
+    heatmap = cv2.resize(heatmap, (image.shape[1], image.shape[0]))
+    heatmap = np.uint8(255 * heatmap)
+
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+    superimposed_img = heatmap * 0.4 + image
+    return np.uint8(superimposed_img)
+
+# ---------------------------
+# STREAMLIT UI
+# ---------------------------
+st.title("Breast Cancer Detection + GradCAM 🔬")
+
+uploaded_file = st.file_uploader("Upload an image", type=["jpg", "png", "jpeg"])
+
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
     img_array = preprocess_image(image)
 
-    # =========================
     # Prediction
-    # =========================
     prediction = model.predict(img_array)[0][0]
 
     if prediction > 0.5:
-        st.success("Prediction: Malignant (Cancer)")
+        st.error(f"Cancer Detected ❌ (Confidence: {prediction:.2f})")
     else:
-        st.success("Prediction: Benign (No Cancer)")
+        st.success(f"No Cancer Detected ✅ (Confidence: {1-prediction:.2f})")
 
-    # =========================
-    # GradCAM
-    # =========================
+    # ---------------------------
+    # GRADCAM
+    # ---------------------------
     try:
-        # 👉 Change this if error
-        last_conv_layer = "conv2d"
+        last_conv_layer = "conv2d"  # ⚠️ change if needed
 
-        heatmap = get_gradcam(img_array, model, last_conv_layer)
+        heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer)
 
-        heatmap = cv2.resize(heatmap, (224, 224))
-        heatmap = np.uint8(255 * heatmap)
-        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+        original = np.array(image.resize((224, 224)))
+        cam_image = overlay_heatmap(heatmap, original)
 
-        img = np.array(image.resize((224, 224)))
-        superimposed_img = heatmap * 0.4 + img
-
-        st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM", use_column_width=True)
+        st.subheader("GradCAM Output")
+        st.image(cam_image, use_column_width=True)
 
     except Exception as e:
-        st.warning("GradCAM failed. Try changing layer name.")
+        st.warning("GradCAM not working. Check layer name.")
+        st.text(str(e))
