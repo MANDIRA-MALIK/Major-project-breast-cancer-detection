@@ -8,7 +8,7 @@ from PIL import Image
 st.title("Breast Cancer Detection + GradCAM 🔬")
 
 # Load model
-model = load_model("model.h5", compile=False)
+model = load_model("model.keras", compile=False)
 
 # 🔥 GradCAM function
 def get_gradcam(img_array, model, layer_name):
