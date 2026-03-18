@@ -3,39 +3,42 @@ import tensorflow as tf
 import numpy as np
 import cv2
 from PIL import Image
-import matplotlib.pyplot as plt
 
-# ========================
-# Load Model
-# ========================
-model = tf.keras.models.load_model("model.keras", compile=False)
+# =========================
+# Load Model (FIX INCLUDED)
+# =========================
+model = tf.keras.models.load_model(
+    "model.keras",
+    compile=False,
+    safe_mode=False   # 🔥 IMPORTANT FIX
+)
 
-# ========================
-# App Title
-# ========================
+# =========================
+# Title
+# =========================
 st.title("Breast Cancer Detection + GradCAM 🔬")
 
-# ========================
+# =========================
 # Upload Image
-# ========================
+# =========================
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
-# ========================
-# Image Preprocessing
-# ========================
+# =========================
+# Preprocess Image
+# =========================
 def preprocess_image(img):
     img = img.resize((224, 224))
     img = np.array(img) / 255.0
     img = np.expand_dims(img, axis=0)
     return img
 
-# ========================
-# Grad-CAM Function
-# ========================
+# =========================
+# GradCAM Function
+# =========================
 def get_gradcam(img_array, model, layer_name):
     grad_model = tf.keras.models.Model(
-        [model.inputs],
-        [model.get_layer(layer_name).output, model.output]
+        inputs=model.inputs,
+        outputs=[model.get_layer(layer_name).output, model.output]
     )
 
     with tf.GradientTape() as tape:
@@ -45,25 +48,26 @@ def get_gradcam(img_array, model, layer_name):
     grads = tape.gradient(loss, conv_outputs)
 
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-
     conv_outputs = conv_outputs[0]
+
     heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
     heatmap = tf.squeeze(heatmap)
 
-    heatmap = np.maximum(heatmap, 0) / np.max(heatmap)
+    heatmap = np.maximum(heatmap, 0) / (np.max(heatmap) + 1e-8)
     return heatmap
 
-# ========================
-# Display Results
-# ========================
+# =========================
+# Run App
+# =========================
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("RGB")
-
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
     img_array = preprocess_image(image)
 
+    # =========================
     # Prediction
+    # =========================
     prediction = model.predict(img_array)[0][0]
 
     if prediction > 0.5:
@@ -71,27 +75,23 @@ if uploaded_file is not None:
     else:
         st.success("Prediction: Benign (No Cancer)")
 
-    # ========================
-    # Grad-CAM
-    # ========================
+    # =========================
+    # GradCAM
+    # =========================
     try:
-        # 👉 CHANGE layer name if needed
+        # 👉 Change this if error
         last_conv_layer = "conv2d"
 
         heatmap = get_gradcam(img_array, model, last_conv_layer)
 
-        # Resize heatmap
         heatmap = cv2.resize(heatmap, (224, 224))
         heatmap = np.uint8(255 * heatmap)
-
-        # Apply color map
         heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
-        # Superimpose
         img = np.array(image.resize((224, 224)))
         superimposed_img = heatmap * 0.4 + img
 
         st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM", use_column_width=True)
 
     except Exception as e:
-        st.warning("Grad-CAM not working. Check layer name.")
+        st.warning("GradCAM failed. Try changing layer name.")
